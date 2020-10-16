@@ -258,6 +258,7 @@ async function issueAndInstallCertficate(namespace, domain) {
     await exec(`cd .werft/certs \
         && terraform init \
         && export GOOGLE_APPLICATION_CREDENTIALS="${GCLOUD_SERVICE_ACCOUNT_PATH}" \
+        && terraform plan \
         && terraform apply -auto-approve \
             -var 'namespace=${namespace}' \
             -var 'dns_zone_domain=gitpod-dev.com' \
