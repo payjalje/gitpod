@@ -11,7 +11,7 @@ module "cert" {
   public_ip = "34.76.116.244"
   
   cert_name = var.namespace
-  cert_namespace = "certs"
+  cert_namespace = "certmanager"
 }
 
 # https://www.terraform.io/docs/providers/google/guides/provider_reference.html
