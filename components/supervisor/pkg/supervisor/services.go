@@ -36,11 +36,42 @@ type RegisterableRESTService interface {
 	RegisterREST(mux *runtime.ServeMux, grpcEndpoint string) error
 }
 
+type ideReadyService struct {
+	ready bool
+	cond  *sync.Cond
+}
+
+func (service *ideReadyService) wait(ctx context.Context) {
+	service.cond.L.Lock()
+	for !service.ready && ctx.Err() != nil {
+		service.cond.Wait()
+	}
+	service.cond.L.Unlock()
+}
+
+func (service *ideReadyService) get() bool {
+	service.cond.L.Lock()
+	ready := service.ready
+	service.cond.L.Unlock()
+	return ready
+}
+
+func (service *ideReadyService) set(ready bool) {
+	service.cond.L.Lock()
+	if service.ready == ready {
+		service.cond.L.Unlock()
+		return
+	}
+	service.ready = ready
+	service.cond.L.Unlock()
+	service.cond.Broadcast()
+}
+
 type statusService struct {
 	ContentState ContentState
 	Ports        *portsManager
 	Tasks        *tasksManager
-	IDEReady     <-chan struct{}
+	ideReady     *ideReadyService
 }
 
 func (s *statusService) RegisterGRPC(srv *grpc.Server) {
@@ -57,21 +88,14 @@ func (s *statusService) SupervisorStatus(context.Context, *api.SupervisorStatusR
 
 func (s *statusService) IDEStatus(ctx context.Context, req *api.IDEStatusRequest) (*api.IDEStatusResponse, error) {
 	if req.Wait {
-		select {
-		case <-s.IDEReady:
-			return &api.IDEStatusResponse{Ok: true}, nil
-		case <-ctx.Done():
+		s.ideReady.wait(ctx)
+		if ctx.Err() != nil {
 			return nil, status.Error(codes.DeadlineExceeded, ctx.Err().Error())
 		}
+		return &api.IDEStatusResponse{Ok: true}, nil
 	}
 
-	var ok bool
-	select {
-	case <-s.IDEReady:
-		ok = true
-	default:
-		ok = false
-	}
+	ok := s.ideReady.get()
 	return &api.IDEStatusResponse{Ok: ok}, nil
 }
 

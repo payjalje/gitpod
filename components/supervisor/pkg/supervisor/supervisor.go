@@ -111,7 +111,7 @@ func Run(options ...RunOption) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var (
 		shutdown = make(chan struct{})
-		ideReady = make(chan struct{})
+		ideReady = &ideReadyService{cond: sync.NewCond(&sync.Mutex{})}
 		cstate   = NewInMemoryContentState(cfg.RepoRoot)
 		portMgmt = newPortsManager(
 			uint32(cfg.IDEPort),
@@ -129,7 +129,7 @@ func Run(options ...RunOption) {
 			ContentState: cstate,
 			Ports:        portMgmt,
 			Tasks:        taskManager,
-			IDEReady:     ideReady,
+			ideReady:     ideReady,
 		},
 		termMuxSrv,
 		RegistrableTokenService{tokenService},
@@ -217,7 +217,7 @@ func hasMetadataAccess() bool {
 	return false
 }
 
-func startAndWatchIDE(ctx context.Context, cfg *Config, wg *sync.WaitGroup, ideReady chan<- struct{}) {
+func startAndWatchIDE(ctx context.Context, cfg *Config, wg *sync.WaitGroup, ideReady *ideReadyService) {
 	defer wg.Done()
 
 	type status int
@@ -248,14 +248,17 @@ supervisorLoop:
 			}
 			s = statusShouldRun
 
-			go runIDEReadinessProbe(cfg, ideReady)
+			go func() {
+				runIDEReadinessProbe(cfg)
+				ideReady.set(true)
+			}()
 
 			go func() {
 				err := cmd.Wait()
 				if err != nil && !strings.Contains(err.Error(), "signal: interrupt") {
 					log.WithError(err).Warn("IDE was stopped")
 				}
-
+				ideReady.set(false)
 				close(ideStopped)
 			}()
 		}
@@ -344,8 +347,7 @@ func buildIDEEnv(cfg *Config) []string {
 	return env
 }
 
-func runIDEReadinessProbe(cfg *Config, ideReady chan<- struct{}) {
-	defer close(ideReady)
+func runIDEReadinessProbe(cfg *Config) {
 	defer log.Info("IDE is ready")
 
 	switch cfg.ReadinessProbe.Type {
